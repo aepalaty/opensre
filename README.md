@@ -105,14 +105,6 @@ We welcome contributors interested in:
 - Observability tooling
 - Deterministic AI systems
 
-- <!-- CONTRIBUTORS-START -->
-Contributors
-Thanks goes to these amazing people:
-
-This section is auto-generated. Run the Update Contributors workflow to refresh.
-
-<!-- CONTRIBUTORS-END -->
-
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
