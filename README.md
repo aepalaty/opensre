@@ -48,6 +48,10 @@ make local-grafana-live
    Run the LangGraph dev UI locally or connect your own integrations and systems.
    Start here: [Full Local Setup Guide](SETUP.md)
 
+<p align="center">
+  <img src="docs/assets/local-grafana-live-flow.gif" alt="Live local Grafana flow" width="100%" />
+</p>
+
 ---
 
 ## Why Tracer
