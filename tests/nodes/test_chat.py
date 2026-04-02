@@ -13,6 +13,18 @@ def _clear_chat_llm_singletons() -> None:
     """Reset module-level chat model cache (isolated test runs)."""
     chat_mod._chat_llm = None
     chat_mod._chat_llm_with_tools = None
+    chat_mod._chat_llm_provider = None
+    chat_mod._chat_llm_with_tools_provider = None
+
+
+class _OpenAIModule:
+    def __init__(self, chat_openai: MagicMock) -> None:
+        self.ChatOpenAI = chat_openai
+
+
+class _AnthropicModule:
+    def __init__(self, chat_anthropic: MagicMock) -> None:
+        self.ChatAnthropic = chat_anthropic
 
 
 @pytest.fixture
@@ -24,11 +36,12 @@ def openai_chat_env(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("openai_chat_env")
 def test_get_chat_llm_openai_with_tools_uses_chat_openai() -> None:
     _clear_chat_llm_singletons()
-    with patch.object(chat_mod, "ChatOpenAI") as mock_openai:
+    with patch.object(chat_mod, "import_module") as mock_import_module:
         mock_base = MagicMock()
         mock_bound = MagicMock()
         mock_base.bind_tools.return_value = mock_bound
-        mock_openai.return_value = mock_base
+        mock_openai = MagicMock(return_value=mock_base)
+        mock_import_module.return_value = _OpenAIModule(mock_openai)
         out = chat_mod._get_chat_llm(with_tools=True)
         mock_openai.assert_called_once()
         assert out is mock_bound
@@ -37,9 +50,10 @@ def test_get_chat_llm_openai_with_tools_uses_chat_openai() -> None:
 @pytest.mark.usefixtures("openai_chat_env")
 def test_get_chat_llm_openai_without_tools_uses_chat_openai() -> None:
     _clear_chat_llm_singletons()
-    with patch.object(chat_mod, "ChatOpenAI") as mock_openai:
+    with patch.object(chat_mod, "import_module") as mock_import_module:
         mock_llm = MagicMock()
-        mock_openai.return_value = mock_llm
+        mock_openai = MagicMock(return_value=mock_llm)
+        mock_import_module.return_value = _OpenAIModule(mock_openai)
         out = chat_mod._get_chat_llm(with_tools=False)
         mock_openai.assert_called_once()
         assert out is mock_llm
@@ -49,9 +63,10 @@ def test_get_chat_llm_anthropic_uses_chat_anthropic(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     _clear_chat_llm_singletons()
-    with patch.object(chat_mod, "ChatAnthropic") as mock_anthropic:
+    with patch.object(chat_mod, "import_module") as mock_import_module:
         mock_llm = MagicMock()
-        mock_anthropic.return_value = mock_llm
+        mock_anthropic = MagicMock(return_value=mock_llm)
+        mock_import_module.return_value = _AnthropicModule(mock_anthropic)
         out = chat_mod._get_chat_llm(with_tools=False)
         mock_anthropic.assert_called_once()
         assert out is mock_llm

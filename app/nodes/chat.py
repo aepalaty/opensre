@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
-from typing import Any
+from importlib import import_module
+from typing import Any, cast
 
-from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import StructuredTool
-from langchain_openai import ChatOpenAI
 
-from app.config import OPENAI_LLM_CONFIG
+from app.config import ANTHROPIC_LLM_CONFIG, DEFAULT_MAX_TOKENS, OPENAI_LLM_CONFIG
 from app.integrations.clients import get_llm_for_tools
 from app.prompts import GENERAL_SYSTEM_PROMPT, ROUTER_PROMPT, SYSTEM_PROMPT
 from app.state import AgentState, ChatMessage
@@ -33,6 +32,7 @@ from app.tools.TracerFailedToolsTool import get_failed_tools
 from app.tools.TracerHostMetricsTool import get_host_metrics
 from app.tools.TracerRunTool import get_tracer_run
 from app.tools.TracerTasksTool import get_tracer_tasks
+from app.utils.cfg_helpers import CfgHelpers
 
 _CHAT_FUNCTIONS: list[Callable[..., Any]] = [
     fetch_failed_run,
@@ -51,6 +51,7 @@ _CHAT_FUNCTIONS: list[Callable[..., Any]] = [
     get_sentry_issue_details,
     list_sentry_issue_events,
 ]
+
 
 def _to_structured_tool(fn: Callable[..., Any] | BaseTool) -> StructuredTool:
     """Build a StructuredTool from a plain callable or a BaseTool instance."""
@@ -96,89 +97,96 @@ def _normalize_messages(msgs: list[Any]) -> list[ChatMessage]:
     return result
 
 
-# ── Chat LLM (LangChain chat model; for real-time streaming) ───────────
+# ── Chat LLM ─────────────────────────────────────────────────────────────
 
-_chat_llm: Runnable | None = None
-_chat_llm_with_tools: Runnable | None = None
+type ToolEnabledChatModel = Runnable[object, object]
+
+_chat_llm: BaseChatModel | None = None
+_chat_llm_with_tools: ToolEnabledChatModel | None = None
+_chat_llm_provider: str | None = None
+_chat_llm_with_tools_provider: str | None = None
 
 
-def _get_chat_llm(*, with_tools: bool = False) -> Runnable:
-    """LangChain chat model for chat nodes (streaming; tools via bind_tools when requested)."""
-    provider = os.getenv("LLM_PROVIDER", "anthropic").lower()
+def _resolve_models(provider: str) -> tuple[str, str]:
+    """Resolve tool and reasoning model names for the active provider."""
     if provider == "openai":
-        return _get_openai_chat_llm(with_tools=with_tools)
-    return _get_anthropic_chat_llm(with_tools=with_tools)
+        return (
+            CfgHelpers.first_env_or_default(
+                env_keys=(
+                    "OPENAI_TOOLCALL_MODEL",
+                    "OPENAI_REASONING_MODEL",
+                    "OPENAI_MODEL",
+                ),
+                default=OPENAI_LLM_CONFIG.toolcall_model,
+            ),
+            CfgHelpers.first_env_or_default(
+                env_keys=("OPENAI_REASONING_MODEL", "OPENAI_MODEL"),
+                default=OPENAI_LLM_CONFIG.reasoning_model,
+            ),
+        )
+    if provider == "anthropic":
+        return (
+            CfgHelpers.first_env_or_default(
+                env_keys=(
+                    "ANTHROPIC_TOOLCALL_MODEL",
+                    "ANTHROPIC_REASONING_MODEL",
+                    "ANTHROPIC_MODEL",
+                ),
+                default=ANTHROPIC_LLM_CONFIG.toolcall_model,
+            ),
+            CfgHelpers.first_env_or_default(
+                env_keys=("ANTHROPIC_REASONING_MODEL", "ANTHROPIC_MODEL"),
+                default=ANTHROPIC_LLM_CONFIG.reasoning_model,
+            ),
+        )
+    raise ValueError(f"Unsupported chat model provider: {provider}")
 
 
-def _get_openai_chat_llm(*, with_tools: bool) -> Runnable:
-    global _chat_llm, _chat_llm_with_tools
-
-    from app.config import DEFAULT_MAX_TOKENS
-
-    if with_tools:
-        if _chat_llm_with_tools is None:
-            tool_model = (
-                (os.getenv("OPENAI_TOOLCALL_MODEL") or "").strip()
-                or (os.getenv("OPENAI_REASONING_MODEL") or "").strip()
-                or (os.getenv("OPENAI_MODEL") or "").strip()
-                or OPENAI_LLM_CONFIG.toolcall_model
-            )
-            base = ChatOpenAI(  # type: ignore[call-arg]
-                model=tool_model,
+def _build_chat_model(*, provider: str, model_name: str) -> BaseChatModel:
+    """Lazy-build a provider-specific chat model for the chat nodes."""
+    if provider == "openai":
+        openai_module = import_module("langchain_openai")
+        chat_openai_cls: Any = openai_module.ChatOpenAI
+        return cast(
+            BaseChatModel,
+            chat_openai_cls(
+                model=model_name,
                 max_tokens=DEFAULT_MAX_TOKENS,
                 streaming=True,
-            )
-            _chat_llm_with_tools = base.bind_tools(CHAT_TOOLS)
-        return _chat_llm_with_tools
-
-    if _chat_llm is None:
-        reasoning_model = (
-            (os.getenv("OPENAI_REASONING_MODEL") or "").strip()
-            or (os.getenv("OPENAI_MODEL") or "").strip()
-            or OPENAI_LLM_CONFIG.reasoning_model
+            ),
         )
-        _chat_llm = ChatOpenAI(  # type: ignore[call-arg]
-            model=reasoning_model,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            streaming=True,
-        )
-    return _chat_llm
-
-
-def _get_anthropic_chat_llm(*, with_tools: bool) -> Runnable:
-    global _chat_llm, _chat_llm_with_tools
-
-    if with_tools:
-        if _chat_llm_with_tools is None:
-            from app.config import ANTHROPIC_TOOLCALL_MODEL, DEFAULT_MAX_TOKENS
-
-            tool_model = (
-                (os.getenv("ANTHROPIC_TOOLCALL_MODEL") or "").strip()
-                or (os.getenv("ANTHROPIC_REASONING_MODEL") or "").strip()
-                or (os.getenv("ANTHROPIC_MODEL") or "").strip()
-                or ANTHROPIC_TOOLCALL_MODEL
-            )
-            base = ChatAnthropic(  # type: ignore[call-arg]
-                model=tool_model,
+    if provider == "anthropic":
+        anthropic_module = import_module("langchain_anthropic")
+        chat_anthropic_cls: Any = anthropic_module.ChatAnthropic
+        return cast(
+            BaseChatModel,
+            chat_anthropic_cls(
+                model=model_name,
                 max_tokens=DEFAULT_MAX_TOKENS,
                 streaming=True,
-            )
+            ),
+        )
+    raise ValueError(f"Unsupported chat model provider: {provider}")
+
+
+def _get_chat_llm(*, with_tools: bool = False) -> BaseChatModel | ToolEnabledChatModel:
+    """Get the provider-aware chat model used by chat nodes."""
+    global _chat_llm, _chat_llm_with_tools, _chat_llm_provider, _chat_llm_with_tools_provider
+
+    provider = CfgHelpers.resolve_llm_provider()
+    tool_model, reasoning_model = _resolve_models(provider)
+
+    if with_tools:
+        # Rebuild the cache when switching providers between requests.
+        if _chat_llm_with_tools is None or _chat_llm_with_tools_provider != provider:
+            base = _build_chat_model(provider=provider, model_name=tool_model)
             _chat_llm_with_tools = base.bind_tools(CHAT_TOOLS)  # type: ignore[assignment]
-        return _chat_llm_with_tools
+            _chat_llm_with_tools_provider = provider
+        return _chat_llm_with_tools  # type: ignore[return-value]
 
-    if _chat_llm is None:
-        from app.config import ANTHROPIC_REASONING_MODEL, DEFAULT_MAX_TOKENS
-
-        reasoning_model = (
-            (os.getenv("ANTHROPIC_REASONING_MODEL") or "").strip()
-            or (os.getenv("ANTHROPIC_MODEL") or "").strip()
-            or ANTHROPIC_REASONING_MODEL
-        )
-        _chat_llm = ChatAnthropic(  # type: ignore[call-arg]
-            model=reasoning_model,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            streaming=True,
-        )
+    if _chat_llm is None or _chat_llm_provider != provider:
+        _chat_llm = _build_chat_model(provider=provider, model_name=reasoning_model)
+        _chat_llm_provider = provider
     return _chat_llm
 
 
@@ -191,19 +199,21 @@ def router_node(state: AgentState) -> dict[str, Any]:
     if not msgs or msgs[-1].get("role") != "user":
         return {"route": "general"}
 
-    response = get_llm_for_tools().invoke([
-        {"role": "system", "content": ROUTER_PROMPT},
-        {"role": "user", "content": str(msgs[-1].get("content", ""))},
-    ])
+    response = get_llm_for_tools().invoke(
+        [
+            {"role": "system", "content": ROUTER_PROMPT},
+            {"role": "user", "content": str(msgs[-1].get("content", ""))},
+        ]
+    )
     route = str(response.content).strip().lower()
     return {"route": route if route in ("tracer_data", "general") else "general"}
 
 
-def chat_agent_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:  # noqa: ARG001
+def chat_agent_node(state: AgentState, _config: RunnableConfig) -> dict[str, Any]:
     """Chat agent with tools for Tracer data queries.
 
-    Uses the configured provider chat model (Anthropic or OpenAI) with bound tools.
-    The LLM can make tool_calls which will be executed by the tool_executor node.
+    Uses the configured provider with bound tools. The LLM can make tool calls
+    which will be executed by the tool_executor node.
     """
     msgs = list(state.get("messages", []))
 
@@ -220,7 +230,7 @@ def chat_agent_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]
     return {"messages": [response]}
 
 
-def general_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:  # noqa: ARG001
+def general_node(state: AgentState, _config: RunnableConfig) -> dict[str, Any]:
     """Direct LLM response without tools for general questions."""
     msgs = list(state.get("messages", []))
 
@@ -268,7 +278,7 @@ def tool_executor_node(state: AgentState) -> dict[str, Any]:
                 result = tool_fn.invoke(tool_args)
                 if not isinstance(result, str):
                     result = json.dumps(result, default=str)
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, KeyError) as e:
             result = json.dumps({"error": str(e)})
 
         tool_messages.append(
