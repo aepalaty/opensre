@@ -4,7 +4,7 @@
   <img width="2136" height="476" alt="github-readme-tracer-banner" src="https://github.com/user-attachments/assets/fac67ac2-e40e-4d58-8421-829ed0ce2a4d" />
 </p>
 
-<h2>OpenSRE: Build and Evaluate Your Own AI SRE Agents</h2>
+<h1>OpenSRE: Build Your Own AI SRE Agents</h1>
 
 <p>The open-source framework for AI SRE agents, and the training and evaluation environment they need to improve. Connect the tools you already run, define your own workflows, and investigate incidents on your own infrastructure.</p>
 
