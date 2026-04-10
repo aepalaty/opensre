@@ -12,10 +12,6 @@
     "dark": "#000000"
   },
   "favicon": "/favicon.ico",
-  "logo": {
-    "light": "/images/logo/tracer/tracer-docs-dark.svg",
-    "dark": "/images/logo/tracer/tracer-docs-light.svg"
-  },
   "styles": {
     "css": "/custom.css"
   },
@@ -252,5 +248,9 @@
       "format": "woff2",
       "weight": 400
     }
+  },
+  "logo": {
+    "light": "/images/logo/tracer/opensre-docs-logo-light.svg",
+    "dark": "/images/logo/tracer/opensre-docs-logo-light.svg"
   }
 }
