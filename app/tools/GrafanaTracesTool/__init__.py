@@ -19,6 +19,7 @@ def _query_grafana_traces_extract_params(sources: dict[str, dict]) -> dict[str, 
         "service_name": grafana.get("service_name", ""),
         "execution_run_id": grafana.get("execution_run_id"),
         "limit": grafana.get("limit", DEFAULT_TRACE_LIMIT),
+        "grafana_backend": grafana.get("_backend"),
         **_grafana_creds(grafana),
     }
 
@@ -57,9 +58,38 @@ def query_grafana_traces(
     limit: int = 20,
     grafana_endpoint: str | None = None,
     grafana_api_key: str | None = None,
+    grafana_backend: Any = None,
     **_kwargs: Any,
 ) -> dict:
     """Query Grafana Cloud Tempo for pipeline traces."""
+    if grafana_backend is not None:
+        raw = grafana_backend.query_traces(service_name=service_name)
+        traces = raw.get("traces", [])
+        if execution_run_id and traces:
+            filtered = [
+                t
+                for t in traces
+                if any(
+                    s.get("attributes", {}).get("execution.run_id") == execution_run_id
+                    for s in t.get("spans", [])
+                )
+            ]
+            traces = filtered if filtered else traces
+        compacted_traces = compact_traces(traces, limit=limit)
+        summary = summarize_counts(len(traces), len(compacted_traces), "traces")
+        result_data: dict[str, Any] = {
+            "source": "grafana_tempo",
+            "available": True,
+            "traces": compacted_traces,
+            "pipeline_spans": [],
+            "total_traces": len(traces),
+            "service_name": service_name,
+            "execution_run_id": execution_run_id,
+        }
+        if summary:
+            result_data["truncation_note"] = summary
+        return result_data
+
     client = _resolve_grafana_client(grafana_endpoint, grafana_api_key)
     if not client or not client.is_configured:
         return {
