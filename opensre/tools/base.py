@@ -103,16 +103,16 @@ class BaseTool(ABC):
         if not self.is_available():
             return ToolResult(
                 success=False,
-                error=f"Tool '{self.my_tool_name}' is not available in this environment.",
+                error=f"Tool '{self.my_tool_name}' is not available. "
+                      "Check that required dependencies and credentials are configured.",
             )
+
         try:
             params = self.extract_params(raw)
-            return self.run(params)
         except ValueError as exc:
             return ToolResult(success=False, error=f"Invalid params: {exc}")
+
+        try:
+            return self.run(params)
         except Exception as exc:  # noqa: BLE001
             return ToolResult(success=False, error=f"Unexpected error: {exc}")
-
-    def __repr__(self) -> str:
-        available = self.is_available()
-        return f"<{self.__class__.__name__} name={self.my_tool_name!r} available={available}>"
